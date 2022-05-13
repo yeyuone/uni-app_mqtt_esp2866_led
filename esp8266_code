@@ -1,0 +1,634 @@
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <FastLED.h>
+#include <ArduinoJson.h>
+FASTLED_USING_NAMESPACE
+// 设置wifi接入信息(请根据您的WiFi信息进行修改)
+const char* ssid = "xzazx";
+const char* password = "111111116";
+const char* mqttServer = "aaa.aaa.com";
+// MQTT服务端连接用户名密码
+const char* mqttUserName = "trqa";
+const char* mqttPassword = "cccc";
+
+
+StaticJsonDocument<96> doc; // DynamicJsonDocument对象
+
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+// 遗嘱设置
+const char* willMsg = "CLIENT-OFFLINE"; // 遗嘱消息内容
+const int willQoS = 1;                   // 遗嘱QoS
+const bool willRetain = true;           // 遗嘱保留
+
+//订阅设置
+const int subQoS = 1;     // 客户端订阅主题时使用的QoS级别
+const bool cleanSession = false; // 清除会话（如QoS>0必须要设为false）
+      // 建立订阅主题。 亮度, 开关, 模式, 颜色，恢复循环基本色模式
+const String topic[] = {"colorLed/brightness","colorLed/switch","colorLed/model","colorLed/purity","colorLed/circleColor","colorLed/circleMode", "colorLed/circleRecover"}; //, "colorLed/answerMenu"
+
+
+//fastled 设置
+
+#define DATA_PIN    13  //13为d7
+#define LED_TYPE    WS2812
+#define COLOR_ORDER GRB //led型号
+#define NUM_LEDS    300 //灯珠数量
+CRGB leds[NUM_LEDS]; //建立leds
+CRGBArray<NUM_LEDS> leds2; //节日
+#define VOLTS          12
+#define MAX_MA       4000
+
+#define BRIGHTNESS          200  //最大亮度
+#define FRAMES_PER_SECOND  120  //每秒帧数 
+//以下皆为节日模式所需
+#define TWINKLE_SPEED 4 // 整体闪烁密度 0/8
+#define TWINKLE_DENSITY 5 // 整体闪烁密度。 0/5
+#define SECONDS_PER_PALETTE  30 // 多久更换一次颜色调色板。
+CRGB gBackgroundColor = CRGB::Black; 
+#define AUTO_SELECT_BACKGROUND_COLOR 0 // 调色板设置
+#define COOL_LIKE_INCANDESCENT 1 // 颜色褪色选项
+CRGBPalette16 gCurrentPalette;
+CRGBPalette16 gTargetPalette;
+bool tag = true;          //修改fastled对象
+void setup() {
+   delay(3000);
+  Serial.begin(9600);     
+  pinMode(13,OUTPUT);          
+  FastLED.setMaxPowerInVoltsAndMilliamps( VOLTS, MAX_MA); //节日模式所需
+  chooseNextColorPalette(gTargetPalette);                 //节日模式所需
+  FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);// 告诉灯关于led条带的配置
+  FastLED.setBrightness(BRIGHTNESS);  // 设置主亮度控制
+   
+  WiFi.mode(WIFI_STA);   //设置ESP8266工作模式为无线终端模式
+  connectWifi();   // 连接WiFi
+  mqttClient.setServer(mqttServer, 1883);  // 设置MQTT服务器和端口号
+  mqttClient.setCallback(receiveCallback); //设置回调
+  mqttClient.setKeepAlive(10); // 设置心跳间隔时间
+  
+  connectMQTTserver(); // 连接MQTT服务器
+}
+// 循环运行的模式列表.  下面将每个模式定义为一个单独的函数
+typedef void (*SimplePatternList[])();
+SimplePatternList gPatterns = { rainbow, rainbowWithGlitter, confetti, sinelon, juggle, bpm};
+SimplePatternList gPatternsPurity = { purity,breathe,variety};
+SimplePatternList gPatternsSlow = {pride}; 
+uint8_t gCurrentPatternNumber = 0; // 当前运行模式列表的位置
+uint8_t gHue = 0; // 将被循环利用的基本色
+//控制设置列表
+//是否启动自动循环模式 1启动
+bool circle = true;  
+//主模式/纯色模式/轻模式 1主模式 2纯色 3轻 4节日星星点点模式
+int mostly = 1;
+//是否自动更新基本色
+bool updateBaseColor = true;
+//开关灯变量
+bool isOpen = true;
+//每个主模式下，模式的循环间隔时间
+int timeCircle = 10;
+
+
+//纯色模式基本色
+int r = 100;
+int g = 100;
+int b = 100;
+
+void loop() {
+  if (mqttClient.connected()) { // 如果开发板成功连接服务器
+    if(isOpen==true){ // 调用当前模式函数一次，更新“leds”数组 
+      if(mostly==1){
+        if(tag==false){
+          tag = true;
+          FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+        }
+         gPatterns[gCurrentPatternNumber]();
+      }else if(mostly==2){
+        if(tag==false){
+          tag = true;
+          FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+        }
+        gPatternsPurity[gCurrentPatternNumber]();
+      }else if(mostly==3){
+        if(tag==false){
+          tag = true;
+          FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+        }
+        gPatternsSlow[gCurrentPatternNumber]();
+      }else{
+        if(tag==true){
+          tag = false;
+          FastLED.addLeds<LED_TYPE,DATA_PIN,COLOR_ORDER>(leds2, NUM_LEDS).setCorrection(TypicalLEDStrip);
+        }
+        //节日模式
+        EVERY_N_SECONDS( SECONDS_PER_PALETTE ) { 
+          chooseNextColorPalette( gTargetPalette ); 
+        }
+        EVERY_N_MILLISECONDS( 10 ) {
+          nblendPaletteTowardPalette( gCurrentPalette, gTargetPalette, 12);
+        }
+        drawTwinkles( leds2);
+      }
+  }
+  
+    
+    
+  FastLED.show();  // 将“led”阵列发送到实际的led带 
+  
+  FastLED.delay(1000/FRAMES_PER_SECOND); // 插入一个延迟，以保持帧率适中
+  // 定期更新 
+  if(updateBaseColor==true){
+    EVERY_N_MILLISECONDS( 20 ) { gHue++; } //  慢慢地调整“基本色” (彩虹模式循环)
+  }
+  
+  if(circle==true){
+    EVERY_N_SECONDS( timeCircle ) { nextPattern(); } // 定期更改模式 
+  }
+  
+  
+    mqttClient.loop(); // 保持心跳
+  } else {                  
+    connectMQTTserver();    // 如果开发板未能成功连接服务器  则尝试连接服务器
+  }
+}
+#define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))//周而复始,类似队列
+
+
+void nextPattern(){ // 当前模式++   继续往后循环
+  if(mostly==1){
+      gCurrentPatternNumber = (gCurrentPatternNumber + 1) % ARRAY_SIZE( gPatterns);
+    }else if(mostly==2){
+      gCurrentPatternNumber = (gCurrentPatternNumber + 1) % ARRAY_SIZE( gPatternsPurity);
+    }else if(mostly==3){
+      gCurrentPatternNumber = (gCurrentPatternNumber + 1) % ARRAY_SIZE( gPatternsSlow);
+    }else{
+      //节日模式不需增长
+    }
+}
+void rainbow() { // FastLED内置的彩虹产生器
+  
+  fill_rainbow( leds, NUM_LEDS, gHue, 7);
+}
+void rainbowWithGlitter() {  // 内置的彩虹产生器, 再加上一些随机的闪光
+  rainbow();
+  addGlitter(80);
+}
+void addGlitter( fract8 chanceOfGlitter) {
+  if( random8() < chanceOfGlitter) {
+    leds[ random16(NUM_LEDS) ] += CRGB::White;
+  }
+}
+void confetti(){ // 随机的彩色斑点闪烁和缓慢褪色 
+  
+  fadeToBlackBy( leds, NUM_LEDS, 10);
+  int pos = random16(NUM_LEDS);
+  leds[pos] += CHSV( gHue + random8(64), 200, 255);
+}
+void sinelon(){ // 一个彩色的点来回掠过，有褪色的痕迹 
+  
+  fadeToBlackBy( leds, NUM_LEDS, 20);
+  int pos = beatsin16( 13, 0, NUM_LEDS-1 );
+  leds[pos] += CHSV( gHue, 255, 192);
+}
+void bpm(){ // 颜色纹理跳动在定义的 Beats-Per-Minute(每分钟节拍数) (BPM)
+  uint8_t BeatsPerMinute = 62;
+  CRGBPalette16 palette = PartyColors_p;
+  uint8_t beat = beatsin8( BeatsPerMinute, 64, 255);
+  for( int i = 0; i < NUM_LEDS; i++) { //9948
+    leds[i] = ColorFromPalette(palette, gHue+(i*2), beat-gHue+(i*10));
+  }
+}
+void juggle() { //八个彩色的点，相互交织和相互不同步 
+  
+  fadeToBlackBy( leds, NUM_LEDS, 20);
+  uint8_t dothue = 0;
+  for( int i = 0; i < 8; i++) {
+    leds[beatsin16( i+7, 0, NUM_LEDS-1 )] |= CHSV(dothue, 200, 255);
+    dothue += 32;
+  }
+}
+void purity(){ //全部纯色
+  for( int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CHSV(r, g, b);
+  }
+}
+void pride() { //不断变化的彩虹
+  static uint16_t sPseudotime = 0;
+  static uint16_t sLastMillis = 0;
+  static uint16_t sHue16 = 0;
+ 
+  uint8_t sat8 = beatsin88( 87, 220, 250);
+  uint8_t brightdepth = beatsin88( 341, 96, 224);
+  uint16_t brightnessthetainc16 = beatsin88( 203, (25 * 256), (40 * 256));
+  uint8_t msmultiplier = beatsin88(147, 23, 60);
+
+  uint16_t hue16 = sHue16;//gHue * 256;
+  uint16_t hueinc16 = beatsin88(113, 1, 3000);
+  
+  uint16_t ms = millis();
+  uint16_t deltams = ms - sLastMillis ;
+  sLastMillis  = ms;
+  sPseudotime += deltams * msmultiplier;
+  sHue16 += deltams * beatsin88( 400, 5,9);
+  uint16_t brightnesstheta16 = sPseudotime;
+  
+  for( uint16_t i = 0 ; i < NUM_LEDS; i++) {
+    hue16 += hueinc16;
+    uint8_t hue8 = hue16 / 256;
+
+    brightnesstheta16  += brightnessthetainc16;
+    uint16_t b16 = sin16( brightnesstheta16  ) + 32768;
+
+    uint16_t bri16 = (uint32_t)((uint32_t)b16 * (uint32_t)b16) / 65536;
+    uint8_t bri8 = (uint32_t)(((uint32_t)bri16) * brightdepth) / 65536;
+    bri8 += (255 - brightdepth);
+    
+    CRGB newcolor = CHSV( hue8, sat8, bri8);
+    
+    uint16_t pixelnumber = i;
+    pixelnumber = (NUM_LEDS-1) - pixelnumber;
+    
+    nblend( leds[pixelnumber], newcolor, 64);
+  }
+}
+//纯色呼吸
+int breatheTag=true;
+double luminance = b;
+void breathe(){
+  luminance+=0.05;
+  for( int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CHSV(r, g, luminance);
+  }
+  breatheTag==true?luminance++:luminance--;
+  FastLED.setBrightness(luminance);
+  if(luminance>=250){
+    breatheTag = false;
+  }
+  if(luminance<=1){
+    breatheTag = true;
+  }
+}
+//渐变
+double dr = r;
+void variety(){
+  for( int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = CHSV(dr, g, b);
+  }
+  dr+=0.05;
+}
+// 连接MQTT服务器并订阅信息
+void connectMQTTserver(){ 
+  
+  // 根据ESP8266的MAC地址生成客户端ID
+  String clientId = "esp8266-" + WiFi.macAddress();
+ 
+  // 建立遗嘱主题
+  String willString = "colorLed/pub";
+  char willTopic[willString.length() + 1];  
+  strcpy(willTopic, willString.c_str());
+ 
+  // 连接MQTT服务器，在连接过程中提供以下参数：客户端ID，用户名 密码  遗嘱主题，遗嘱QoS，遗嘱保留，遗嘱信息, cleanSession
+  if (mqttClient.connect(clientId.c_str(), mqttUserName, mqttPassword, willTopic, willQoS, willRetain, willMsg,cleanSession)){ 
+    Serial.println("MQTT服务器已连接.");  
+    publishOnlineStatus();     //发布在线状态
+    subscribeTopic(); // 订阅指定主题
+  } else {
+    Serial.print("MQTT服务器连接失败.");delay(5000);
+  }   
+}
+ 
+// 发布信息(上线...遗嘱)
+void publishOnlineStatus(){
+  //   建立遗嘱主题
+  String willString = "colorLed/pub";
+  char willTopic[willString.length() + 1];  
+  strcpy(willTopic, willString.c_str());
+ 
+  // 建立设备在线的消息。此信息将以保留形式向遗嘱主题发布
+  String onlineMessageString = "CLIENT  -ONLINE"; 
+  char onlineMsg[onlineMessageString.length() + 1];   
+  strcpy(onlineMsg, onlineMessageString.c_str());
+  
+  // 向遗嘱主题发布设备在线消息
+  if(mqttClient.publish(willTopic, onlineMsg, true)){
+    Serial.print("发布上线信息: ");Serial.println(onlineMsg);    
+  } else {
+    Serial.println("上线信息发布失败."); 
+  }
+}
+
+// 发布信息(正式..)
+void pubMQTTmsg(String messageString){
+  // 建立发布主题
+  String topicString = "colorLed/pub";
+  char publishTopic[topicString.length() + 1];  
+  strcpy(publishTopic, topicString.c_str());
+ 
+  // 发布成功信息
+  char publishMsg[messageString.length() + 1];   
+  strcpy(publishMsg, messageString.c_str());
+  
+  // 主题发布信息
+  if(mqttClient.publish(publishTopic, publishMsg)){
+    Serial.print("发布主题名:");Serial.println(publishTopic);
+    Serial.print("发布信息:");Serial.println(publishMsg);    
+  } else {
+    Serial.println("信息发布失败."); 
+  }
+}
+ 
+// 订阅指定主题
+void subscribeTopic(){
+  
+   int strLength = sizeof(topic)/sizeof(topic[0]);
+  
+  for(int i ;i<strLength;i++){
+    char subTopic[topic[i].length() + 1];
+    strcpy(subTopic, topic[i].c_str());
+     // 通过串口监视器输出是否成功订阅主题以及订阅的主题名称
+      if(mqttClient.subscribe(subTopic, subQoS)){
+        Serial.print("订阅主题名:");
+        Serial.println(subTopic);
+      } else {
+        Serial.print("订阅失败...");
+      }  
+  }
+}
+ 
+// 收到信息后的回调函数
+void receiveCallback(char* topic, byte* payload, unsigned int length) {
+  String received;String strTopic;
+  char arrTopic[strlen(topic)+1];
+  strcpy(arrTopic, topic);
+  for (int i = 0; i < length; i++) {
+    received +=  (char)payload[i];
+  }
+  strTopic = arrTopic;
+  
+  
+  
+  if(strTopic == "colorLed/brightness"){ //  亮度 0-255
+    FastLED.setBrightness(received.toInt());
+  }
+  
+  if(strTopic == "colorLed/switch"){ //  开关  0/1
+    if(received == "1"){  //开
+      if(!isOpen){
+        isOpen = true;
+      }
+      FastLED.show();
+    }else{ //关
+      isOpen = false;
+      FastLED.clear();
+    }
+  }
+  
+  if(strTopic == "colorLed/model"){ //  切换模式中的单一模式 1/2/3
+    circle = false;
+    if(mostly==1){
+      gCurrentPatternNumber = (received.toInt()) % ARRAY_SIZE( gPatterns);
+    }else if(mostly==2){
+      gCurrentPatternNumber = (received.toInt()) % ARRAY_SIZE( gPatternsPurity);
+    }else{
+      gCurrentPatternNumber = (received.toInt()) % ARRAY_SIZE( gPatternsSlow);
+    }
+    
+  }
+  
+  if(strTopic == "colorLed/purity"){ //  纯色  json[rgb]
+    deserializeJson(doc, received);
+    JsonObject root_0 = doc[0];
+    r = root_0["r"];g = root_0["g"];b = root_0["b"];
+    mostly = 2;
+    gCurrentPatternNumber = 0;
+     circle = false;
+  }
+ 
+  if(strTopic == "colorLed/circleColor"){  //循环色颜色 1-?
+    gHue = received.toInt();
+  }
+  
+  if(strTopic == "colorLed/circleMode"){ //切换循环模式(4个主模式)  1/4
+    mostly = received.toInt();
+  }
+  
+  if(strTopic == "colorLed/circleRecover"){ //恢复循环并调整循环间隔时间  10+
+    circle = true;
+    timeCircle = received.toInt();
+  }
+
+  //回传内容
+  pubMQTTmsg("strTopic: "+strTopic +" connect: " +received+"");
+}
+
+// ESP8266连接wifi
+void connectWifi(){
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {delay(1000);Serial.print(".");}
+  Serial.println("");Serial.println("WiFi Connected!");Serial.println(""); 
+}
+
+//节日灯依赖
+void drawTwinkles( CRGBSet& L)
+{
+  uint16_t PRNG16 = 11337;
+  
+  uint32_t clock32 = millis();
+  
+  CRGB bg;
+  if( (AUTO_SELECT_BACKGROUND_COLOR == 1) &&
+      (gCurrentPalette[0] == gCurrentPalette[1] )) {
+    bg = gCurrentPalette[0];
+    uint8_t bglight = bg.getAverageLight();
+    if( bglight > 64) {
+      bg.nscale8_video( 16); 
+    } else if( bglight > 16) {
+      bg.nscale8_video( 64); 
+    } else {
+      bg.nscale8_video( 86); 
+    }
+  } else {
+    bg = gBackgroundColor; // just use the explicitly defined background color
+  }
+
+  uint8_t backgroundBrightness = bg.getAverageLight();
+  
+  for( CRGB& pixel: L) {
+    PRNG16 = (uint16_t)(PRNG16 * 2053) + 1384; 
+    uint16_t myclockoffset16= PRNG16; 
+    PRNG16 = (uint16_t)(PRNG16 * 2053) + 1384; 
+    uint8_t myspeedmultiplierQ5_3 =  ((((PRNG16 & 0xFF)>>4) + (PRNG16 & 0x0F)) & 0x0F) + 0x08;
+    uint32_t myclock30 = (uint32_t)((clock32 * myspeedmultiplierQ5_3) >> 3) + myclockoffset16;
+    uint8_t  myunique8 = PRNG16 >> 8; 
+
+    CRGB c = computeOneTwinkle( myclock30, myunique8);
+
+    uint8_t cbright = c.getAverageLight();
+    int16_t deltabright = cbright - backgroundBrightness;
+    if( deltabright >= 32 || (!bg)) { 
+      pixel = c;
+    } else if( deltabright > 0 ) {
+      pixel = blend( bg, c, deltabright * 8);
+    } else { 
+      pixel = bg;
+    }
+  }
+}
+
+
+//节日灯依赖
+CRGB computeOneTwinkle( uint32_t ms, uint8_t salt)
+{
+  uint16_t ticks = ms >> (8-TWINKLE_SPEED);
+  uint8_t fastcycle8 = ticks;
+  uint16_t slowcycle16 = (ticks >> 8) + salt;
+  slowcycle16 += sin8( slowcycle16);
+  slowcycle16 =  (slowcycle16 * 2053) + 1384;
+  uint8_t slowcycle8 = (slowcycle16 & 0xFF) + (slowcycle16 >> 8);
+  
+  uint8_t bright = 0;
+  if( ((slowcycle8 & 0x0E)/2) < TWINKLE_DENSITY) {
+    bright = attackDecayWave8( fastcycle8);
+  }
+  uint8_t hue = slowcycle8 - salt;
+  CRGB c;
+  if( bright > 0) {
+    c = ColorFromPalette( gCurrentPalette, hue, bright, NOBLEND);
+    if( COOL_LIKE_INCANDESCENT == 1 ) {
+      coolLikeIncandescent( c, fastcycle8);
+    }
+  } else {
+    c = CRGB::Black;
+  }
+  return c;
+}
+
+
+
+//节日灯依赖
+uint8_t attackDecayWave8( uint8_t i)
+{
+  if( i < 86) {
+    return i * 3;
+  } else {
+    i -= 86;
+    return 255 - (i + (i/2));
+  }
+}
+
+//节日灯依赖
+void coolLikeIncandescent( CRGB& c, uint8_t phase)
+{
+  if( phase < 128) return;
+  uint8_t cooling = (phase - 128) >> 4;
+  c.g = qsub8( c.g, cooling);
+  c.b = qsub8( c.b, cooling * 2);
+}
+
+
+//节日灯依赖
+const TProgmemRGBPalette16 RedGreenWhite_p FL_PROGMEM =
+{  CRGB::Red, CRGB::Red, CRGB::Red, CRGB::Red, 
+   CRGB::Red, CRGB::Red, CRGB::Red, CRGB::Red, 
+   CRGB::Red, CRGB::Red, CRGB::Gray, CRGB::Gray, 
+   CRGB::Green, CRGB::Green, CRGB::Green, CRGB::Green };
+
+
+//节日灯依赖
+#define Holly_Green 0x00580c
+#define Holly_Red   0xB00402
+const TProgmemRGBPalette16 Holly_p FL_PROGMEM =
+{  Holly_Green, Holly_Green, Holly_Green, Holly_Green, 
+   Holly_Green, Holly_Green, Holly_Green, Holly_Green, 
+   Holly_Green, Holly_Green, Holly_Green, Holly_Green, 
+   Holly_Green, Holly_Green, Holly_Green, Holly_Red 
+};
+
+
+//节日灯依赖
+const TProgmemRGBPalette16 RedWhite_p FL_PROGMEM =
+{  CRGB::Red,  CRGB::Red,  CRGB::Red,  CRGB::Red, 
+   CRGB::Gray, CRGB::Gray, CRGB::Gray, CRGB::Gray,
+   CRGB::Red,  CRGB::Red,  CRGB::Red,  CRGB::Red, 
+   CRGB::Gray, CRGB::Gray, CRGB::Gray, CRGB::Gray };
+
+
+//节日灯依赖
+const TProgmemRGBPalette16 BlueWhite_p FL_PROGMEM =
+{  CRGB::Blue, CRGB::Blue, CRGB::Blue, CRGB::Blue, 
+   CRGB::Blue, CRGB::Blue, CRGB::Blue, CRGB::Blue, 
+   CRGB::Blue, CRGB::Blue, CRGB::Blue, CRGB::Blue, 
+   CRGB::Blue, CRGB::Gray, CRGB::Gray, CRGB::Gray };
+
+
+//节日灯依赖
+#define HALFFAIRY ((CRGB::FairyLight & 0xFEFEFE) / 2)
+#define QUARTERFAIRY ((CRGB::FairyLight & 0xFCFCFC) / 4)
+const TProgmemRGBPalette16 FairyLight_p FL_PROGMEM =
+{  CRGB::FairyLight, CRGB::FairyLight, CRGB::FairyLight, CRGB::FairyLight, 
+   HALFFAIRY,        HALFFAIRY,        CRGB::FairyLight, CRGB::FairyLight, 
+   QUARTERFAIRY,     QUARTERFAIRY,     CRGB::FairyLight, CRGB::FairyLight, 
+   CRGB::FairyLight, CRGB::FairyLight, CRGB::FairyLight, CRGB::FairyLight };
+
+
+//节日灯依赖
+const TProgmemRGBPalette16 Snow_p FL_PROGMEM =
+{  0x304048, 0x304048, 0x304048, 0x304048,
+   0x304048, 0x304048, 0x304048, 0x304048,
+   0x304048, 0x304048, 0x304048, 0x304048,
+   0x304048, 0x304048, 0x304048, 0xE0F0FF };
+
+
+//节日灯依赖
+#define C9_Red    0xB80400
+#define C9_Orange 0x902C02
+#define C9_Green  0x046002
+#define C9_Blue   0x070758
+#define C9_White  0x606820
+const TProgmemRGBPalette16 RetroC9_p FL_PROGMEM =
+{  C9_Red,    C9_Orange, C9_Red,    C9_Orange,
+   C9_Orange, C9_Red,    C9_Orange, C9_Red,
+   C9_Green,  C9_Green,  C9_Green,  C9_Green,
+   C9_Blue,   C9_Blue,   C9_Blue,
+   C9_White
+};
+
+
+//节日灯依赖
+#define Ice_Blue1 0x0C1040
+#define Ice_Blue2 0x182080
+#define Ice_Blue3 0x5080C0
+const TProgmemRGBPalette16 Ice_p FL_PROGMEM =
+{
+  Ice_Blue1, Ice_Blue1, Ice_Blue1, Ice_Blue1,
+  Ice_Blue1, Ice_Blue1, Ice_Blue1, Ice_Blue1,
+  Ice_Blue1, Ice_Blue1, Ice_Blue1, Ice_Blue1,
+  Ice_Blue2, Ice_Blue2, Ice_Blue2, Ice_Blue3
+};
+
+
+
+//节日灯依赖
+const TProgmemRGBPalette16* ActivePaletteList[] = {
+  &RetroC9_p,
+  &BlueWhite_p,
+  &RainbowColors_p,
+  &FairyLight_p,
+  &RedGreenWhite_p,
+  &PartyColors_p,
+  &RedWhite_p,
+  &Snow_p,
+  &Holly_p,
+  &Ice_p  
+};
+
+
+//节日灯依赖
+void chooseNextColorPalette( CRGBPalette16& pal)
+{
+  const uint8_t numberOfPalettes = sizeof(ActivePaletteList) / sizeof(ActivePaletteList[0]);
+  static uint8_t whichPalette = -1; 
+  whichPalette = addmod8( whichPalette, 1, numberOfPalettes);
+
+  pal = *(ActivePaletteList[whichPalette]);
+}
