@@ -1,0 +1,304 @@
+<template>
+	<view>
+		<view  style="text-align: center;font-size: 40rpx;" class="title">
+			<text>LED灯带控制</text> 
+			<text style="font-size: 25rpx;">({{(client==null||!client.connected)?"离线":"在线"}})</text> 
+		</view>
+	
+		
+		<view style="font-size: 24rpx; text-align: center;margin: 40rpx;">
+			<button @click="swithButton" size="mini" type="primary"><uni-icons color="white" type="settings-filled"></uni-icons>开/关</button>
+		</view>
+		
+
+		<view v-if="chosedModel===0" >
+			<view   style="font-size: 24rpx; text-align: center;margin: 40rpx;">
+				<button @click="circleRecover" size="mini" type="primary"><uni-icons color="white" type="settings-filled"></uni-icons>循环播放</button>
+			</view  style=" text-align: center;"> 
+			<button style="margin: 10rpx;" v-for="(item,index) in modelOneButtons" :key="index"  size="mini" type="primary"
+			@click="modelButton(index)"><uni-icons color="white" type="paperplane-filled"></uni-icons>{{item}}</button>
+			<view class="content">
+				
+				<view class="dialog">
+					<text style="color: white;">
+						亮度:
+					</text>
+					<view class="flex" @touchstart="light" @touchmove="light"> </view>
+					</view>
+				</view>
+		</view>
+		<view v-show="chosedModel===1">
+			<button style="margin: 10rpx;" v-for="(item,index) in modelTwoButtons" :key="index"  size="mini" type="primary"
+			@click="modelButton(index)"><uni-icons color="white" type="paperplane-filled"></uni-icons>{{item}}</button>
+			
+					<view class="content">
+						<view class="dialog">
+							<view id="colorBg" ref="colorBg" class="colorBg" @touchstart="touched" @touchmove="touched">
+								<view class="roundBuff" :catchtouchmove="true" @c.stop="()=>{}" :style="`transform:rotate(${degrees}deg)`"></view>
+							</view>
+							<view v-if="chosedModel===1" class="flex" @touchstart="light" @touchmove="light"> </view>
+							</view>
+						</view>
+		</view>
+		<view v-if="chosedModel===2" >
+			<view   style="font-size: 24rpx; text-align: center;margin: 40rpx;">
+				<button @click="circleRecover" size="mini" type="primary"><uni-icons color="white" type="settings-filled"></uni-icons>循环播放</button>
+			</view  style=" text-align: center;"> 
+			<button style="margin: 10rpx;" v-for="(item,index) in modelThreeButtons" :key="index"  size="mini" type="primary"
+			@click="modelButton(index)"><uni-icons color="white" type="paperplane-filled"></uni-icons>{{item}}</button>
+			<view class="content">
+				
+				<view class="dialog">
+					<text style="color: white;">
+						亮度:
+					</text>
+					<view class="flex" @touchstart="light" @touchmove="light"> </view>
+					</view>
+				</view>
+		</view>
+		<view v-if="chosedModel===3" >
+			<view   style="font-size: 24rpx; text-align: center;margin: 40rpx;">
+				<button @click="swithButton" size="mini" type="primary"><uni-icons color="white" type="settings-filled"></uni-icons>启动/关闭</button>
+			</view  style=" text-align: center;"> 
+			<view class="content">
+				
+				<view class="dialog">
+					<text style="color: white;">
+						亮度:
+					</text>
+					<view class="flex" @touchstart="light" @touchmove="light"> </view>
+					</view>
+				</view>
+		</view>
+		
+		
+		<view> <!-- 模式选择 -->
+				<uni-fab
+					:pattern="pattern"
+					:content="content"
+					@trigger="trigger"
+				></uni-fab>
+			</view>
+		</view>
+		
+	</view>
+</template>
+
+<script>
+	
+	//import mqtt from '../../utils/mqtt.js';//二选一
+	import mqtt from '../../utils/mqtt.min.js';
+	import {mapState} from 'vuex'
+	export default {
+		data() {
+				return {
+					colorPanWidth: 20,
+					colorPanRadius: 0,
+					pointerBox: {},
+					saturation:0,  //饱和度
+					degrees: 0, //色彩
+					lights:100   ,//亮度
+					chosedModel:0,
+					switch:true, //开关标记
+					modelOneButtons:[
+							"彩虹",
+							"星星",
+							"斑点",
+							"穿梭",
+							"跳跃",
+							"交织"
+					],
+					modelTwoButtons:[
+						"静态",
+						"呼吸",
+						"渐变"
+					],
+					modelThreeButtons:[
+							"瀑布",
+					],
+					pattern: {
+										color: '#009966',
+										backgroundColor: '#fff',
+										selectedColor: '#009966',
+										buttonColor: '#FF6666',
+										iconColor: '#FFFF66'
+									},
+						content: [{
+											// iconPath: '/static/image.png',
+											// selectedIconPath: '/static/image-active.png',
+											text: '炫彩',
+											active: false
+										},
+										{
+
+											text: '纯色',
+											active: false
+										},
+										{
+
+											text: '缓慢',
+											active: false
+										},
+										{
+										
+											text: '节日',
+											active: false
+										}
+									]
+				}
+			},
+			mounted() {
+				uni.getSystemInfo({
+					success: (res) => {
+							uni.createSelectorQuery().select('#colorBg').boundingClientRect((rect) => {
+							this.pointerBox = rect
+						}).exec()
+						this.colorPanRadius = res.screenWidth * 0.4
+						
+							
+					}
+				})
+			},
+			computed:{
+						...mapState(['client'])
+					},
+			methods: {
+				circleRecover(){
+					let msg = {
+						sendOnTopic:'colorLed/circleRecover',
+						sendMassage:10+''}
+					this.$store.dispatch("publish",msg)
+				},
+				swithButton(){
+					let msg = {
+						sendOnTopic:'colorLed/switch',
+						sendMassage:(this.switch===true?1:0)+''}
+					this.$store.dispatch("publish",msg)
+					this.switch=!this.switch
+				},
+				modelButton(index){
+					let msg = {
+						sendOnTopic:'colorLed/model',
+						sendMassage:index+''}
+					this.$store.dispatch("publish",msg)
+				},
+				trigger(e) {
+								this.content[e.index].active = !e.item.active
+								this.chosedModel = e.index
+								let msg = {
+									sendOnTopic:'colorLed/circleMode',
+									sendMassage:e.index+1+''}
+								this.$store.dispatch("publish",msg)
+								this.switch=!this.switch
+							},
+				touched(e) {
+					const {
+						pageX,
+						pageY,
+					} = e.touches[0]
+					this.rotatePointer(pageX, pageY)
+				},
+				rotatePointer(pageX = 0, pageY = 0) {
+						uni.createSelectorQuery().select('#colorBg').boundingClientRect((rect) => {
+						this.pointerBox = rect
+					}).exec()
+					const {
+						pointerBox,
+						colorPanWidth
+					} = this
+					const mouseX = pageX - colorPanWidth
+					const mouseY = pageY - colorPanWidth
+					var centerY = pointerBox.top + (pointerBox.height / 2) - 0,
+						centerX = pointerBox.left + (pointerBox.height / 2) - 0,
+						radians = Math.atan2(mouseX - centerX, mouseY - centerY)
+					this.degrees = (radians * (180 / Math.PI) * -1) + 180;
+					
+					const query = uni.createSelectorQuery().in(this);
+					query.select('.roundBuff').boundingClientRect(colorP => {
+					  const query = uni.createSelectorQuery().in(this);
+					  query.select('#colorBg').boundingClientRect(colorBord => {
+						if(pageY<colorBord.bottom&&pageY>colorBord.top&&pageX>colorBord.left&&pageX<colorBord.right){
+							let saturation =  Math.round(255/100* 100/(colorBord.width/2)*Math.round(Math.sqrt( 
+							Math.pow(pageX < colorP.right?Math.abs(pageX - colorP.right):Math.abs(colorP.right - pageX ),2)+
+							Math.pow(pageY < colorP.top?Math.abs(pageY - colorP.top):Math.abs(colorP.top-pageY),2)
+							 )))
+							this.saturation = saturation>255?255:saturation
+							this.degrees = Math.round(this.degrees.toFixed(0)*255/360)
+							let msg = {
+								sendOnTopic:'colorLed/purity',
+								sendMassage:JSON.stringify([{r:this.degrees,g:this.saturation,b:this.lights}])
+								}
+							this.$store.dispatch("publish",msg)
+						}
+					  }).exec();
+					}).exec();
+				},
+				light(e){
+					const {clientX} =  e.changedTouches[0]
+					  const query = uni.createSelectorQuery().in(this);
+					  query.select('.flex').boundingClientRect(flex => {
+						if(clientX>flex.left&&clientX<flex.right){
+							let x
+								x= Math.round(255/flex.width*Math.abs(clientX - flex.left))
+								this.lights = x>255?255:x
+						}
+						let msg = {
+							sendOnTopic:'colorLed/brightness',
+							sendMassage:this.lights+''
+						}
+						this.$store.dispatch("publish",msg)
+					}).exec();
+				},
+			}
+		}
+</script>
+<style>
+	
+	
+		.dialog {
+			display: block;
+			border-radius: 30rpx;
+			background-color: #303030;
+			margin: 20rpx;
+			padding: 30rpx;
+		}
+	
+		.flex {
+			display: flex;
+			background: linear-gradient(to right ,black,white);
+			height: 15vw;
+			justify-content: space-between;
+			margin-top:5vw;
+		}
+		.colorBg {
+			width: 80vw;
+			height: 80vw;
+			margin: 5vw;
+			background: conic-gradient(red,
+					yellow,
+					lime,
+					aqua,
+					blue,
+					fuchsia,
+					red);
+			border-radius: 50%;
+			position: relative;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+		}
+	
+		.roundBuff {
+			width: 1px;
+			height: 1px;
+			justify-content: center;
+			align-items: center;
+			background: #ffffff;
+			border-radius: 50%;
+			opacity: 0;
+		}
+		.colorPan {
+			position: absolute;
+			color: #FFFFFF;
+		}
+</style>
